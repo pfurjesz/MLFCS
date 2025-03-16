@@ -1,0 +1,5 @@
+ML_fin_project/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
