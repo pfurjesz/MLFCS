@@ -13,35 +13,23 @@ pdtrx.rename(columns={
 
 table = pdtrx[['datetime','amount']]
 table['datetime'] = pd.to_datetime(table['datetime'])
-volume = table.groupby(['datetime']).sum()
-hours = volume.index.to_series().dt.hour
-hours.rename('hour',inplace=True)
-mins = volume.index.to_series().dt.minute
-mins.rename('min',inplace=True)
-time=pd.concat([hours,mins],axis=1)
-quant=pd.concat([time,volume],axis=1)
+#Different from Aleksandr grouping. My time interval is (t,t+1]. His is [t,t+1).
+table['datetime'] = table['datetime'].dt.ceil('min')
 
-Q1=quant.groupby(['hour','min']).quantile(0.25)
-Q1.rename(columns={
-    'amount':'Q1'},inplace=True)
-Q2=quant.groupby(['hour','min']).quantile(0.5)
-Q2.rename(columns={
-    'amount':'Q2'},inplace=True)
-Q3=quant.groupby(['hour','min']).quantile(0.75)
-Q3.rename(columns={
-    'amount':'Q3'},inplace=True)
-Q4=quant.groupby(['hour','min']).quantile(1)
-Q4.rename(columns={
-    'amount':'Q4'},inplace=True)
-
-Qs=pd.concat([Q1,Q2,Q3],axis=1)
-
-avg = quant.groupby(['hour','min']).mean()
-avg['y'] = Q4['Q4']/avg['amount']
-avg['logy'] = np.log(avg['log'])
-
-avg.hist(column='logy',bins=1440)
+volume = table.groupby('datetime',as_index=False).sum()
+volume.set_index('datetime',verify_integrity=True,inplace=True)
+new_index = pd.date_range(volume.index[0],volume.index[-1],freq = 'min')
+volume = volume.reindex(new_index,fill_value=0)
+volume['time'] = volume.index.time
+quantiles = volume[['time','amount']].groupby('time').quantile([0.25,0.5,0.75])
+quantiles = quantiles.reset_index().rename(columns={'level_1':'quantiles'})
+quantiles = quantiles.pivot(columns='quantiles',index='time',values='amount')
+volume['mean'] = volume[['time','amount']].groupby('time').transform('mean')
+volume['y'] = volume['amount']/volume['mean']
+volume['logy'] = np.log(volume['amount']/volume['mean'])
+volume.replace(-np.inf, np.nan,inplace=True)
+volume.dropna(inplace=True)
 
 if __name__ == "__main__":
-    Qs.plot()
-    avg.hist(column='logy', bins=1440)
+    quantiles.plot()
+    volume.hist(column='logy',bins=800)
