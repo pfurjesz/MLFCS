@@ -1,0 +1,2 @@
+,mean_fit_time,std_fit_time,mean_score_time,std_score_time,param_subsample,param_num_parallel_tree,param_min_child_weight,param_max_depth,param_learning_rate,params,split0_test_rmse,mean_test_rmse,std_test_rmse,rank_test_rmse,split0_test_mae,mean_test_mae,std_test_mae,rank_test_mae
+0,85.22291088104248,0.0,1.0204195976257324,0.0,0.3,100,8,9,0.01,"{'subsample': 0.3, 'num_parallel_tree': 100, 'min_child_weight': 8, 'max_depth': 9, 'learning_rate': 0.01}",-8.023830914831052,-8.023830914831052,0.0,1,-2.896033777458535,-2.896033777458535,0.0,1
