@@ -12,14 +12,6 @@ def create_timestamp_id(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def resample_ob_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
-    """Resample OB data to specified frequency"""
-    df = df.set_index('datetime')
-    df = df.resample(freq).last()  # Take last observation in each period
-
-    print("Data Frquency of the OB Data Resampled Successfully with frequency: ", freq)
-
-    return df.reset_index()
 
 
 def resample_ob_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
@@ -48,6 +40,8 @@ def resample_ob_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     
     print(f"Resampled OB data to {freq} frequency. Selected {len(resampled)} rows.")
     return resampled.reset_index()
+
+
 
 def resample_trx_data(df: pd.DataFrame, freq: str) -> pd.DataFrame:
     """
@@ -100,7 +94,7 @@ def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# Function to standardize the side column (from previous response)
+
 def standardize_side_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardize the 'side' column by removing extra spaces and ensuring values are 'buy' or 'sell'.

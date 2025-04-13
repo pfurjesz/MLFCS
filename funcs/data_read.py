@@ -9,9 +9,17 @@ from pathlib import Path
 # Get the project root (parent of notebooks folder)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_FOLDER = PROJECT_ROOT / "data"
+FEATURES_OUTPUT_DIR = PROJECT_ROOT / "ob_features"
 ALLOWED_FREQUENCIES = ['1min', '5min', '10min']
 ALLOWED_THRESHOLDS = [1, 5, 10]
+# Define this at your config level (e.g., config.py or notebook header)
+TRX_FEATURE_DIR = PROJECT_ROOT / "trx_features"
 
+
+
+##########################################################
+# Transaction Data Functions
+##########################################################
 
 def read_txn_data(test: bool, test_size: int = 1) -> pd.DataFrame:
     """
@@ -78,7 +86,7 @@ def read_txn_data(test: bool, test_size: int = 1) -> pd.DataFrame:
 
     return trx_df
 
-def dave_txn_to_parquet(trx_dataset, parquet_file:str):
+def save_txn_to_parquet(trx_dataset, parquet_file:str):
     """
         Save the dataset to a parquet file.
     """
@@ -102,6 +110,9 @@ def read_txn_from_parquet(parquet_file:str):
     return trx_dataset
 
 
+###########################################################
+# Order Book Data Functions
+###########################################################
 
 
 def read_ob_data(test: bool = False, test_size: int = 1):
@@ -200,4 +211,80 @@ def read_ob_from_parquet(parquet_file: str) -> pd.DataFrame:
         print(f"Error loading OB data: {e}")
         return None
 
+############################ READ FEATURES
+
+def load_ob_features(freq="1min"):
+    """
+    Read and concatenate feature files for a given frequency into a single DataFrame.
+    
+    Args:
+        freq (str): The frequency to read (e.g., "1min", "5min", "10min"). Default is "1min".
+        
+    Returns:
+        pd.DataFrame: Combined DataFrame of features for the specified frequency.
+        
+    Raises:
+        FileNotFoundError: If the frequency subfolder or files are not found.
+    """
+    # Define the frequency-specific directory
+    freq_output_dir = FEATURES_OUTPUT_DIR / freq
+    
+    # Check if the directory exists
+    if not freq_output_dir.exists():
+        raise FileNotFoundError(f"Directory {freq_output_dir} not found. Ensure features for {freq} have been generated.")
+    
+    # List all feature files in the frequency subfolder
+    feature_files = [
+        os.path.join(freq_output_dir, f) for f in os.listdir(freq_output_dir)
+        if f.startswith("features_") and f.endswith(".csv")
+    ]
+    
+    if not feature_files:
+        raise FileNotFoundError(f"No feature files found in {freq_output_dir}")
+    
+    # Read and concatenate all feature files
+    print(f"Reading {len(feature_files)} files from {freq_output_dir}...")
+    df_list = [pd.read_csv(f) for f in feature_files]
+    combined_df = pd.concat(df_list, ignore_index=True)
+    
+    print(f"Combined DataFrame for {freq} created. Total rows: {len(combined_df):,}")
+    return combined_df
+
+
+
+def load_trx_features(frequency="1min"):
+    """
+    Load preprocessed TRX features for a specific time frequency.
+    
+    Args:
+        frequency (str): Time frequency (e.g., "1min", "5min", "10min")
+        
+    Returns:
+        pd.DataFrame: Loaded transaction features
+    
+    Raises:
+        FileNotFoundError: If requested frequency doesn't exist
+        ValueError: If invalid frequency format
+    """
+    # Validate frequency format (e.g., "5min" not "5mins")
+    if not (frequency.endswith("min") and frequency[:-3].isdigit()):
+        raise ValueError("Frequency must be in format '[0-9]+min' (e.g., '5min')")
+    
+    # Build full file path
+    file_path = Path(TRX_FEATURE_DIR) / f"trx_features_{frequency}.parquet"
+    
+    try:
+        df = pd.read_parquet(file_path)
+        print(f"✅ Loaded TRX features ({frequency}) from:\n{file_path}")
+        return df
+    except FileNotFoundError:
+        # Generate helpful error with available options
+        available_files = list(Path(TRX_FEATURE_DIR).glob("trx_features_*.parquet"))
+        available_freqs = sorted(f.stem.split("_")[-1] for f in available_files)
+        
+        raise FileNotFoundError(
+            f"❌ TRX features not found for frequency '{frequency}'\n"
+            f"Available frequencies: {available_freqs}\n"
+            f"Directory searched: {TRX_FEATURE_DIR}"
+        ) from None
 
