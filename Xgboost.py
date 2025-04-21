@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import datetime
-from MLFCS.utils import read_txn_data, preprocess_txn_data, create_lob_dataset, merge_txn_and_lob
+from utils import read_txn_data, preprocess_txn_data, create_lob_dataset, merge_txn_and_lob
 import xgboost as xgb
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, make_scorer
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, PredefinedSplit
@@ -58,8 +58,8 @@ def get_targets(df:pd.DataFrame,log=False)->np.ndarray:
 dfs_features = get_features(df_merged)
 dfs_targets = get_targets(df_merged)
 
-x,x_test,y,y_test = train_test_split(dfs_features,dfs_targets,train_size=0.9,shuffle=False)
-x_train,x_val,y_train,y_val = train_test_split(x,y,train_size=7/9,shuffle=False)
+x,x_test,y,y_test = train_test_split(dfs_features,dfs_targets,train_size=0.8,shuffle=False)
+x_train,x_val,y_train,y_val = train_test_split(x,y,train_size=7/8,shuffle=False)
 # train_idx,_ = train_test_split(range(dfs_features.shape[0]),train_size=0.7,shuffle=False)
 # val_idx, _ = train_test_split(_,train_size=2/3,shuffle=False)
 split = PredefinedSplit(test_fold=[-1]*len(x_train)+[0]*len(x_val))
@@ -132,13 +132,13 @@ search = RandomizedSearchCV(
 search.fit(x,y[:,0])
 search_df=pd.DataFrame(search.cv_results_)
 search_df.drop(columns = ['std_test_rmse', 'std_fit_time', 'std_test_mae', 'std_score_time'] ,inplace=True)
-search_df.to_csv('MLFCS/xgboost_val/search2.csv')
+search_df.to_csv('xgboost_val/search1.csv')
 
 
 
 search_df[search_df['rank_test_mae'] == 1]
 search_df[search_df['rank_test_rmse'] == 1]
-params=search_df.at[87,'params']
+params=search_df.at[1,'params']
 
 testmodel = model = xgb.XGBRegressor(objective=custom_obj,**params)
 testmodel.fit(x,y[:,0])
