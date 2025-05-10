@@ -53,7 +53,7 @@ def get_features(df:pd.DataFrame)->np.ndarray:
 
 def get_targets(df:pd.DataFrame,log=False)->np.ndarray:
     # No features to predict first target
-    return df[['deseasoned_total_volume','total_volume', 'mean_volume']].values[:-1]
+    return df[['deseasoned_total_volume','total_volume', 'mean_volume']].values[1:]
 
 dfs_features = get_features(df_merged)
 dfs_targets = get_targets(df_merged)
@@ -126,19 +126,19 @@ param_grid ={"n_estimators": [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
              }
 
 search = RandomizedSearchCV(
-    model, n_iter=100, refit=False, scoring={'rmse':rmse,'mae':mae},param_distributions=param_grid,cv=split
+    model, n_iter=200, refit=False, scoring={'rmse':rmse,'mae':mae},param_distributions=param_grid,cv=split
 )
 
 search.fit(x,y[:,0])
 search_df=pd.DataFrame(search.cv_results_)
 search_df.drop(columns = ['std_test_rmse', 'std_fit_time', 'std_test_mae', 'std_score_time'] ,inplace=True)
-search_df.to_csv('xgboost_val/search1.csv')
+search_df.to_csv('xgboost_val/search2.csv')
 
 
 
 search_df[search_df['rank_test_mae'] == 1]
 search_df[search_df['rank_test_rmse'] == 1]
-params=search_df.at[1,'params']
+params=search_df.at[171,'params']
 
 testmodel = model = xgb.XGBRegressor(objective=custom_obj,**params)
 testmodel.fit(x,y[:,0])
