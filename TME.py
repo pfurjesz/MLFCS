@@ -37,7 +37,8 @@ def recalc(df:pd.DataFrame,train_df:pd.DataFrame)->pd.DataFrame:
 class CustomDataset(Dataset):
     def __init__(self, dataframe: pd.DataFrame, h: int):
         self.trx = torch.tensor(dataframe[['buy_volume', 'sell_volume', 'buy_txn', 'sell_txn', 'volume_imbalance', 'txn_imbalance']].to_numpy())
-        self.lob = torch.tensor(dataframe[['ask_volume', 'bid_volume', 'spread', 'lob_volume_imbalance', 'ask_slope_1', 'ask_slope_5', 'ask_slope_10', 'bid_slope_5', 'bid_slope_10', 'spread']].to_numpy())
+        self.lob = torch.tensor(dataframe[['ask_volume', 'bid_volume', 'spread', 'lob_volume_imbalance', 'ask_slope_1', 'ask_slope_5', 'ask_slope_10', 'bid_slope_1', 'bid_slope_5', 'bid_slope_10','slope_imbalance_1', 'slope_imbalance_5',
+       'slope_imbalance_10']].to_numpy())
         self.y = torch.tensor(dataframe['log_deseasoned_total_volume'].to_numpy())
         self.h = h
 
@@ -59,7 +60,7 @@ class latent_dist(nn.Module):
         self.R_trx = nn.Linear(self.h, 1,bias=False)
         self.L_trx = nn.Linear(6, 1,bias=True)
         self.R_lob = nn.Linear(self.h, 1,bias=False)
-        self.L_lob = nn.Linear(10, 1,bias=True)
+        self.L_lob = nn.Linear(13, 1,bias=True)
         self.soft=nn.Softmax(dim=1)
 
     def forward(self, trx, lob):
@@ -78,12 +79,12 @@ class log_norm(nn.Module):
         self.meanR_trx = nn.Linear(self.h, 1,bias=False)
         self.meanL_trx = nn.Linear(6, 1,bias=True)
         self.meanR_lob = nn.Linear(self.h, 1,bias=False)
-        self.meanL_lob = nn.Linear(10, 1,bias=True)
+        self.meanL_lob = nn.Linear(13, 1,bias=True)
 
         self.varR_trx = nn.Linear(self.h, 1,bias=False)
         self.varL_trx = nn.Linear(6, 1,bias=True)
         self.varR_lob = nn.Linear(self.h, 1,bias=False)
-        self.varL_lob = nn.Linear(10, 1,bias=True)
+        self.varL_lob = nn.Linear(13, 1,bias=True)
 
 
     def forward(self, trx, lob):
@@ -193,7 +194,7 @@ if __name__ == "__main__":
     trx_df = read_txn_data(use_load=False)
     lob_df = create_lob_dataset(use_load=False)
 
-    trx_df = preprocess_txn_data(trx_df, freq='1min', fill_missing_ts=False)
+    trx_df = preprocess_txn_data(trx_df, freq='10min', fill_missing_ts=False)
 
     df_merged = merge_txn_and_lob(trx_df, lob_df)
     # split data in train,val, test
@@ -205,10 +206,10 @@ if __name__ == "__main__":
 
     # hyperparams
     h = 3  # h is window size
-    learning_rate = 1e-4
+    learning_rate = 1e-3
     batch_size = train_df.shape[0]
     epochs = 20
-    Lambda = 0.1  # L2 regularisation coefficient
+    Lambda = 1  # L2 regularisation coefficient
 
     # standardize features
     train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
@@ -229,7 +230,7 @@ if __name__ == "__main__":
 
     best_val = float('inf')
     counter = 0
-    for t in range(1000):
+    for t in range(10):
         print(f"Epoch {t + 1}\n-------------------------------")
         stop, best_val, counter = train_loop(train_dataloader, val_dataloader, model, TME_loss, optimizer, t,stop_counter=counter, best_val=best_val)
         print(counter)
