@@ -6,12 +6,12 @@ import xgboost as xgb
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, make_scorer
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, PredefinedSplit
 
-# train ,val ,test = 0.7, 0.2, 0.1
+# train ,val ,test = 0.7, 0.1, 0.2
 
 trx_df = read_txn_data(use_load=False)
 lob_df = create_lob_dataset(use_load=False)
 
-trx_df = preprocess_txn_data(trx_df, freq='1min',fill_missing_ts=False)
+trx_df = preprocess_txn_data(trx_df, freq='10min',fill_missing_ts=False)
 
 df_merged = merge_txn_and_lob(trx_df, lob_df)
 
@@ -69,8 +69,8 @@ split = PredefinedSplit(test_fold=[-1]*len(x_train)+[0]*len(x_val))
 def custom_error(actual,pred,add=np.array([]),type='sq'):
     #add should be dfs_targets from get_targets
     assert type in ['sq','abs']
-    y, y_test = train_test_split( add, train_size=0.9, shuffle=False)
-    y_train, y_val = train_test_split(y, train_size=7 / 9, shuffle=False)
+    y, y_test = train_test_split( add, train_size=0.8, shuffle=False)
+    y_train, y_val = train_test_split(y, train_size=7 / 8, shuffle=False)
     # print('pred shape ')
     # print(pred.shape)
     # print(pred.reshape(-1,1))
@@ -126,28 +126,28 @@ param_grid ={"n_estimators": [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
              }
 
 search = RandomizedSearchCV(
-    model, n_iter=200, refit=False, scoring={'rmse':rmse,'mae':mae},param_distributions=param_grid,cv=split
+    model, n_iter=500, refit=False, scoring={'rmse':rmse,'mae':mae},param_distributions=param_grid,cv=split
 )
 
 search.fit(x,y[:,0])
 search_df=pd.DataFrame(search.cv_results_)
 search_df.drop(columns = ['std_test_rmse', 'std_fit_time', 'std_test_mae', 'std_score_time'] ,inplace=True)
-search_df.to_csv('xgboost_val/search2.csv')
+search_df.to_csv('xgboost_val/search1-10m.csv')
 
 
 
 search_df[search_df['rank_test_mae'] == 1]
 search_df[search_df['rank_test_rmse'] == 1]
-params=search_df.at[171,'params']
+params=search_df.at[324,'params']
 
 testmodel = model = xgb.XGBRegressor(objective=custom_obj,**params)
 testmodel.fit(x,y[:,0])
 print(root_mean_squared_error(testmodel.predict(x_test),y_test[:,0]))
 print(mean_absolute_error(testmodel.predict(x_test),y_test[:,0]))
 
-
-
-
-
-
-
+#nan for 10 min
+# {'subsample': 0.6,
+#  'n_estimators': 200,
+#  'min_child_weight': 2,
+#  'max_depth': 6,
+#  'learning_rate': 0.045}
