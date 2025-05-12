@@ -6,21 +6,21 @@ from torch.nn import Softmax
 
 from utils import read_txn_data, preprocess_txn_data, create_lob_dataset, merge_txn_and_lob
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch import nn
 
-def recalc(df:pd.DataFrame,train_size=0.7)->pd.DataFrame:
+def recalc(df:pd.DataFrame,train_df:pd.DataFrame)->pd.DataFrame:
     df['time'] = df['datetime'].dt.time
-    split = train_test_split(df, train_size=train_size, shuffle=False)
-    a = split[0].shape[0]
-    train = df.iloc[:a].copy()
+    train_size = train_df.shape[0]
+    train = train = df.iloc[:train_size].copy()
 
     train['mean_volume'] = train.groupby('time')['total_volume'].transform('mean')
     train['deseasoned_total_volume'] = train['total_volume'] / train['mean_volume']
     train['log_deseasoned_total_volume'] = np.log(train['deseasoned_total_volume'])
 
-    rest = df.iloc[a:].copy()
+    rest = df.iloc[train_size:].copy()
 
     trange = pd.date_range("00:00:05", "23:59:05", freq='1min').time
     for t in trange:
@@ -97,7 +97,10 @@ class log_norm(nn.Module):
         lob_var = self.varR_lob(lob)
         lob_var = self.varL_lob(torch.permute(lob_var,(0,2,1)))
 
-        return torch.cat((trx_mean,lob_mean),dim=1).squeeze(dim=2), torch.exp(torch.cat((trx_var,lob_var),dim=1).squeeze(dim=2))
+        #clamp variance in exp, try limit range of var by using tanh
+        # return torch.cat((trx_mean,lob_mean),dim=1).squeeze(dim=2), torch.exp(10*torch.tanh(torch.cat((trx_var,lob_var),dim=1)).squeeze(dim=2))
+        return torch.cat((trx_mean, lob_mean), dim=1).squeeze(dim=2), torch.exp(
+            torch.cat((trx_var, lob_var), dim=1).squeeze(dim=2))
 
 class TME(nn.Module):
     def __init__(self,h):
@@ -115,17 +118,20 @@ def TME_loss(pred,target,eps=1e-6):
     target = target.unsqueeze(dim=1)
     eps = torch.tensor(eps)
     p1 = torch.exp(-torch.square(target - mean)/(2*var))/(torch.exp(target)*torch.sqrt(var)) #dropped constants
-    return -torch.log(torch.maximum(torch.diag(torch.matmul(p1,torch.permute(prob,(1,0)))),eps)).sum()
+    # return -torch.log(torch.maximum(torch.diag(torch.matmul(p1,torch.permute(prob,(1,0)))),eps)).sum() #sum or mean
+    return -torch.log(torch.maximum((p1*prob).sum(1), eps)).sum()
 
-def train_loop(dataloader, model, loss_fn, optimizer):
-    size = len(dataloader.dataset)
+def train_loop(train_dataloader, val_dataloader, model, loss_fn, optimizer, epoch, checkpoint_name:str='training_checkpoint.pth',stop_counter=0, epochs_before_stopping = 10, best_val = float('inf')):
+    size = len(train_dataloader.dataset)
     # Set the model to training mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
     model.train()
-    for batch, (trx,lob, y) in enumerate(dataloader):
+    train_loss = 0
+    for batch, (trx,lob, y) in enumerate(train_dataloader):
         # Compute prediction and loss
         pred = model(trx,lob)
         loss = loss_fn(pred, y)
+        train_loss += loss.item()
         # print(f"batch number {batch},loss: {loss.item()}")
 
         # Backpropagation
@@ -133,9 +139,38 @@ def train_loop(dataloader, model, loss_fn, optimizer):
         optimizer.step()
         optimizer.zero_grad()
 
-        if batch % 100 == 0:
-            loss, current = loss.item(), batch * batch_size + len(trx)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+        # if batch % 100 == 0:
+        #     loss, current = loss.item(), batch * batch_size + len(trx)
+        #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+    print(f"train loss: {train_loss:>7f}")
+
+    model.eval()
+    val_loss = 0
+    counter = stop_counter
+    with torch.no_grad():
+        for trx,lob, y in val_dataloader:
+            pred = model(trx,lob)
+            val_loss += loss_fn(pred, y).item()
+
+    if val_loss < best_val:
+        counter = 0
+        best_val = val_loss
+        checkpoint = {
+            'epoch': epoch+1, #count start from 1
+            'model_state': model.state_dict(),
+            'optimizer_state': optimizer.state_dict(),
+            'loss': val_loss,
+        }
+        torch.save(checkpoint, checkpoint_name)
+        print('new checkpoint saved')
+    else:
+        counter += 1
+    print(f"val loss: {val_loss:>7f}")
+
+    if counter >= epochs_before_stopping:
+        return (True, best_val,counter)
+    else:
+        return (False, best_val,counter)
 
 def test_loop(dataloader, model, loss_fn):
     # Set the model to evaluation mode - important for batch normalization and dropout layers
@@ -161,21 +196,28 @@ if __name__ == "__main__":
     trx_df = preprocess_txn_data(trx_df, freq='1min', fill_missing_ts=False)
 
     df_merged = merge_txn_and_lob(trx_df, lob_df)
-    #split data in train,val, test
+    # split data in train,val, test
+    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
+    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
+    df_merged = recalc(df_merged, train_df) #recalculate deseasonalised vol based on train data only
     _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
     train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
 
-    #hyperparams
-    h = 3 # h is window size
-    learning_rate = 1e-3
-    batch_size = 64
+    # hyperparams
+    h = 3  # h is window size
+    learning_rate = 1e-4
+    batch_size = train_df.shape[0]
     epochs = 20
-    Lambda = 1 #L2 regularisation coefficient
+    Lambda = 0.1  # L2 regularisation coefficient
 
-    #standardize features
-    train_data = CustomDataset((train_df.iloc[:, 1:] - train_df.iloc[:, 1:].mean()) / train_df.iloc[:, 1:].std(), h)
-    val_data = CustomDataset((val_df.iloc[:, 1:] - train_df.iloc[:, 1:].mean()) / train_df.iloc[:, 1:].std(), h)
-    test_data = CustomDataset((test_df.iloc[:, 1:] - train_df.iloc[:, 1:].mean()) / train_df.iloc[:, 1:].std(), h)
+    # standardize features
+    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+    test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+
+    # train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+    # val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
+    # test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
 
     train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=False)
     val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
@@ -185,8 +227,61 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=Lambda)
 
-    for t in range(epochs):
+    best_val = float('inf')
+    counter = 0
+    for t in range(1000):
         print(f"Epoch {t + 1}\n-------------------------------")
-        train_loop(train_dataloader, model, TME_loss, optimizer)
+        stop, best_val, counter = train_loop(train_dataloader, val_dataloader, model, TME_loss, optimizer, t,stop_counter=counter, best_val=best_val)
+        print(counter)
         test_loop(test_dataloader, model, TME_loss)
+        if stop:
+            break
     print("Done!")
+
+    #load best validation model for continued training or inference
+    loaded_checkpoint = torch.load('training_checkpoint.pth', weights_only=True)
+    model = TME(h).double()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
+    model.load_state_dict(loaded_checkpoint['model_state'])
+    optimizer.load_state_dict(loaded_checkpoint['optimizer_state'])
+
+    #mean test loss
+    model.eval()
+    test_loss = 0
+    size = len(test_dataloader.dataset)
+    with torch.no_grad():
+        for trx, lob, y in test_dataloader:
+            pred = model(trx, lob)
+            test_loss += TME_loss(pred, y).item()
+    print(test_loss / size)
+
+    model.eval()
+    size = len(test_dataloader.dataset)
+    test_loss = 0
+    means = []
+    vars = []
+    probs = []
+    ys = []
+
+    # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
+    with torch.no_grad():
+        for trx, lob, y in test_dataloader:
+            pred1, pred2, pred3 = model(trx, lob)
+            means.append(pred1)
+            vars.append(pred2)
+            probs.append(pred3)
+            ys.append(y)
+            test_loss += TME_loss((pred1, pred2, pred3), y).item()
+    means = torch.cat((means), 0)
+    vars = torch.cat((vars), 0)
+    probs = torch.cat((probs), 0)
+    ys = torch.cat((ys), 0)
+
+    pred = torch.exp(train_df.loc[:, 'log_deseasoned_total_volume'].mean() + (means + 0.5 * vars) * train_df.loc[:,
+                                                                                                    'log_deseasoned_total_volume'].std())
+    pred = (pred * probs).sum(1) * test_df['mean_volume'].iloc[h:].to_numpy()
+
+    rmse = root_mean_squared_error(pred, test_df['total_volume'].iloc[h:])
+    mae = mean_absolute_error(pred, test_df['total_volume'].iloc[h:])
+    print(rmse)
+    print(mae)
