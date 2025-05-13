@@ -215,7 +215,7 @@ if __name__ == "__main__":
         learning_rate = 1e-3
         batch_size = train_df.shape[0]
         # epochs = 30
-        Lambda = 1  # L2 regularisation coefficient
+        Lambda = 0.1  # L2 regularisation coefficient
 
         # standardize features
         train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
