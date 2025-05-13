@@ -73,8 +73,12 @@ def preprocess_txn_data(trx_dataset, freq, second=5, fill_missing_ts=True):
 
     if fill_missing_ts:
         # Create a complete range of minutes
-        full_range = pd.DataFrame({'datetime': pd.date_range(start=trx_dataset['datetime'].min().ceil('min') + pd.Timedelta(seconds=second), 
-                                                        end=trx_dataset['datetime'].max().ceil('min') + pd.Timedelta(seconds=second), 
+        # full_range = pd.DataFrame({'datetime': pd.date_range(start=trx_dataset['datetime'].min().ceil('min') + pd.Timedelta(seconds=second), 
+        #                                                 end=trx_dataset['datetime'].max().ceil('min') + pd.Timedelta(seconds=second), 
+        #                                                 freq=freq)})
+
+        full_range = pd.DataFrame({'datetime': pd.date_range(start=trx_dataset_grouped['datetime'].min(), 
+                                                        end=trx_dataset_grouped['datetime'].max(), 
                                                         freq=freq)})
 
         # Merge with full time range to ensure all minutes are present

@@ -1,0 +1,9 @@
+{
+    "rmse": 16.286301830331972,
+    "mae": 5.422805611530727,
+    "val_losses": [
+        Infinity,
+        Infinity,
+        Infinity
+    ]
+}
