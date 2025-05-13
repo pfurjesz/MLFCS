@@ -120,7 +120,7 @@ def TME_loss(pred,target,eps=1e-6):
     eps = torch.tensor(eps)
     p1 = torch.exp(-torch.square(target - mean)/(2*var))/(torch.exp(target)*torch.sqrt(var)) #dropped constants
     # return -torch.log(torch.maximum(torch.diag(torch.matmul(p1,torch.permute(prob,(1,0)))),eps)).sum() #sum or mean
-    return -torch.log(torch.maximum((p1*prob).sum(1), eps)).sum()
+    return -torch.log(torch.maximum((p1*prob).sum(1), eps)).mean() #sum or mean
 
 def train_loop(train_dataloader, val_dataloader, model, loss_fn, optimizer, epoch, checkpoint_name:str='training_checkpoint.pth',stop_counter=0, epochs_before_stopping = 10, best_val = float('inf')):
     size = len(train_dataloader.dataset)
@@ -143,7 +143,8 @@ def train_loop(train_dataloader, val_dataloader, model, loss_fn, optimizer, epoc
         # if batch % 100 == 0:
         #     loss, current = loss.item(), batch * batch_size + len(trx)
         #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-    print(f"train loss: {train_loss:>7f}")
+    if epoch%10 == 0:
+        print(f"train loss: {train_loss:>7f}")
 
     model.eval()
     val_loss = 0
@@ -163,10 +164,11 @@ def train_loop(train_dataloader, val_dataloader, model, loss_fn, optimizer, epoc
             'loss': val_loss,
         }
         torch.save(checkpoint, checkpoint_name)
-        print('new checkpoint saved')
+        # print('new checkpoint saved')
     else:
         counter += 1
-    print(f"val loss: {val_loss:>7f}")
+    if epoch%10==0:
+        print(f"val loss: {val_loss:>7f}")
 
     if counter >= epochs_before_stopping:
         return (True, best_val,counter)
@@ -190,6 +192,8 @@ def test_loop(dataloader, model, loss_fn):
 
     print(f"Test Error: \n Test Loss: {test_loss:>8f} \n")
 
+def train_ensemble(model,model_params:dict,train_data,val_data,):
+    pass
 if __name__ == "__main__":
     trx_df = read_txn_data(use_load=False)
     lob_df = create_lob_dataset(use_load=False)
@@ -204,85 +208,100 @@ if __name__ == "__main__":
     _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
     train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
 
-    # hyperparams
-    h = 3  # h is window size
-    learning_rate = 1e-3
-    batch_size = train_df.shape[0]
-    epochs = 20
-    Lambda = 1  # L2 regularisation coefficient
+    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
+    for h in range(6,24*6+3,3):
+        # hyperparams
+        # h = 3  # h is window size
+        learning_rate = 1e-3
+        batch_size = train_df.shape[0]
+        # epochs = 30
+        Lambda = 1  # L2 regularisation coefficient
 
-    # standardize features
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-    test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+        # standardize features
+        train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+        val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+        test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
 
-    # train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
-    # val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
-    # test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
+        # train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+        # val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
+        # test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
 
-    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=False)
-    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-    test_dataloader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+        train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=False)
+        val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+        test_dataloader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
-    model = TME(h).double()
+        model = TME(h).double()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=Lambda)
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=Lambda)
 
-    best_val = float('inf')
-    counter = 0
-    for t in range(10):
-        print(f"Epoch {t + 1}\n-------------------------------")
-        stop, best_val, counter = train_loop(train_dataloader, val_dataloader, model, TME_loss, optimizer, t,stop_counter=counter, best_val=best_val)
-        print(counter)
-        test_loop(test_dataloader, model, TME_loss)
-        if stop:
-            break
-    print("Done!")
+        file_name = f'validation_results_10m\checkpoint{val_res.shape[0]}.pth'
 
-    #load best validation model for continued training or inference
-    loaded_checkpoint = torch.load('training_checkpoint.pth', weights_only=True)
-    model = TME(h).double()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
-    model.load_state_dict(loaded_checkpoint['model_state'])
-    optimizer.load_state_dict(loaded_checkpoint['optimizer_state'])
+        best_val = float('inf')
+        counter = 0
+        t=0
+        stop = False
+        while not stop:
+            if t%10==0:
+                print(f"Epoch {t + 1}\n-------------------------------")
+            stop, best_val, counter = train_loop(train_dataloader, val_dataloader, model, TME_loss, optimizer, t,stop_counter=counter, best_val=best_val,checkpoint_name=file_name)
+            if t%10==0:
+                test_loop(test_dataloader, model, TME_loss)
+            t+=1
+            if stop:
+                break
+        print("Done!")
 
-    #mean test loss
-    model.eval()
-    test_loss = 0
-    size = len(test_dataloader.dataset)
-    with torch.no_grad():
-        for trx, lob, y in test_dataloader:
-            pred = model(trx, lob)
-            test_loss += TME_loss(pred, y).item()
-    print(test_loss / size)
+        #load best validation model for continued training or inference
+        loaded_checkpoint = torch.load(file_name, weights_only=True)
+        model = TME(h).double()
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
+        model.load_state_dict(loaded_checkpoint['model_state'])
+        optimizer.load_state_dict(loaded_checkpoint['optimizer_state'])
 
-    model.eval()
-    size = len(test_dataloader.dataset)
-    test_loss = 0
-    means = []
-    vars = []
-    probs = []
-    ys = []
+        model.eval()
+        size = len(test_dataloader.dataset)
+        test_loss = 0
+        means = []
+        vars = []
+        probs = []
+        # ys = []
 
-    # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-    with torch.no_grad():
-        for trx, lob, y in test_dataloader:
-            pred1, pred2, pred3 = model(trx, lob)
-            means.append(pred1)
-            vars.append(pred2)
-            probs.append(pred3)
-            ys.append(y)
-            test_loss += TME_loss((pred1, pred2, pred3), y).item()
-    means = torch.cat((means), 0)
-    vars = torch.cat((vars), 0)
-    probs = torch.cat((probs), 0)
-    ys = torch.cat((ys), 0)
+        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
+        with torch.no_grad():
+            for trx, lob, y in test_dataloader:
+                pred1, pred2, pred3 = model(trx, lob)
+                means.append(pred1)
+                vars.append(pred2)
+                probs.append(pred3)
+                # ys.append(y)
+                test_loss += TME_loss((pred1, pred2, pred3), y).item()
+        means = torch.cat((means), 0)
+        vars = torch.cat((vars), 0)
+        probs = torch.cat((probs), 0)
+        # ys = torch.cat((ys), 0)
 
-    pred = torch.exp(train_df.loc[:, 'log_deseasoned_total_volume'].mean() + (means + 0.5 * vars) * train_df.loc[:,
-                                                                                                    'log_deseasoned_total_volume'].std())
-    pred = (pred * probs).sum(1) * test_df['mean_volume'].iloc[h:].to_numpy()
+        pred = torch.exp(train_df.loc[:, 'log_deseasoned_total_volume'].mean() + (means + 0.5 * vars) * train_df.loc[:,
+                                                                                                        'log_deseasoned_total_volume'].std())
+        pred = (pred * probs).sum(1) * test_df['mean_volume'].iloc[h:].to_numpy()
 
-    rmse = root_mean_squared_error(pred, test_df['total_volume'].iloc[h:])
-    mae = mean_absolute_error(pred, test_df['total_volume'].iloc[h:])
-    print(rmse)
-    print(mae)
+        rmse = root_mean_squared_error(pred, test_df['total_volume'].iloc[h:])
+        mae = mean_absolute_error(pred, test_df['total_volume'].iloc[h:])
+        # print(rmse)
+        # print(mae)
+
+        new_row = pd.DataFrame({
+            'checkpoint': [file_name[23:]],
+            'h': [h],
+            'lr': [learning_rate],
+            'batch_size': [batch_size],
+            'lambda': [Lambda],
+            'epoch': [loaded_checkpoint['epoch']],
+            'val_loss': [loaded_checkpoint['loss']],
+            'test_loss': [test_loss],
+            'rmse': [rmse],
+            'mae': [mae]
+        })
+
+
+        val_res = pd.concat([val_res, new_row], ignore_index=True)
+        val_res.to_csv('validation_results_10m/results.csv')
