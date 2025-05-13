@@ -3,7 +3,7 @@ import numpy as np
 import datetime
 from utils import read_txn_data, preprocess_txn_data, create_lob_dataset, merge_txn_and_lob
 import xgboost as xgb
-from sklearn.metrics import root_mean_squared_error, mean_absolute_error, make_scorer
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, make_scorer, r2_score
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, PredefinedSplit
 
 # train ,val ,test = 0.7, 0.1, 0.2
@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split, RandomizedSearchCV, Predef
 trx_df = read_txn_data(use_load=False)
 lob_df = create_lob_dataset(use_load=False)
 
-trx_df = preprocess_txn_data(trx_df, freq='10min',fill_missing_ts=False)
+trx_df = preprocess_txn_data(trx_df, freq='5min',fill_missing_ts=False)
 
 df_merged = merge_txn_and_lob(trx_df, lob_df)
 
@@ -132,18 +132,17 @@ search = RandomizedSearchCV(
 search.fit(x,y[:,0])
 search_df=pd.DataFrame(search.cv_results_)
 search_df.drop(columns = ['std_test_rmse', 'std_fit_time', 'std_test_mae', 'std_score_time'] ,inplace=True)
-search_df.to_csv('xgboost_val/search1-10m.csv')
-
-
+search_df.to_csv('xgboost_val/search1-5m.csv')
 
 search_df[search_df['rank_test_mae'] == 1]
 search_df[search_df['rank_test_rmse'] == 1]
-params=search_df.at[324,'params']
+params=search_df.at[430,'params']
 
 testmodel = model = xgb.XGBRegressor(objective=custom_obj,**params)
 testmodel.fit(x,y[:,0])
 print(root_mean_squared_error(testmodel.predict(x_test),y_test[:,0]))
 print(mean_absolute_error(testmodel.predict(x_test),y_test[:,0]))
+print(r2_score(testmodel.predict(x_test),y_test[:,0]))
 
 #nan for 10 min
 # {'subsample': 0.6,
