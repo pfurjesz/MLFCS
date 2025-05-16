@@ -301,27 +301,9 @@ def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lamb
         val_res = pd.concat([val_res, new_row], ignore_index=True)
         val_res.to_csv('validation_results_10m/results.csv')
 
-def train_ensemble(model,model_params:dict,train_df:pd.DataFrame,val_df:pd.DataFrame,):
-    pass
-    h = model_params['h']
-    learning_rate = model_params['learning_rate']
-    batch_size = model_params['batch_size']
-    Lambda = model_params['Lambda']
-
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-
-    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-
-    model = TME(h).double()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
-    for i in range(20):
-        file_name = f'model{i+1}.pth'
-
-
-if __name__ == "__main__":
+#ran after validation_tests. continue training models switch lr to 1e-4.
+# Only improved validation results are saved. Epochs saved is total epochs with lr 1e-4 and 1e-5
+def continued_validation_tests():
     trx_df = read_txn_data(use_load=False)
     lob_df = create_lob_dataset(use_load=False)
 
@@ -373,6 +355,150 @@ if __name__ == "__main__":
         for g in optimizer.param_groups:
             g['lr'] = 1e-4
         learning_rate = 1e-4
+
+        best_val = val_res.at[i,"val_loss"]
+        counter = 0
+        t=val_res.at[i,'epoch']
+        stop = False
+        while not stop:
+            if t%100==0:
+                print(f"Epoch {t + 1}\n-------------------------------")
+            stop, best_val, counter = train_loop(train_dataloader, val_dataloader, model, TME_loss, optimizer, t,stop_counter=counter, best_val=best_val,checkpoint_name=file_name)
+            if t%100==0:
+                test_loop(test_dataloader, model, TME_loss)
+            t+=1
+            if stop:
+                break
+        print("Done!")
+        if best_val == val_res.at[i,"val_loss"]: #if continue training has no improvment
+            continue
+        #load best validation model for continued training or inference
+        loaded_checkpoint = torch.load(file_name, weights_only=False) #don't know why false needed
+        model = TME(h).double()
+        model.load_state_dict(loaded_checkpoint['model_state'])
+
+        model.eval()
+        size = len(test_dataloader.dataset)
+        test_loss = 0
+        means = []
+        vars = []
+        probs = []
+        # ys = []
+
+        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
+        with torch.no_grad():
+            for trx, lob, y in test_dataloader:
+                pred1, pred2, pred3 = model(trx, lob)
+                means.append(pred1)
+                vars.append(pred2)
+                probs.append(pred3)
+                # ys.append(y)
+                test_loss += TME_loss((pred1, pred2, pred3), y).item()
+        means = torch.cat((means), 0)
+        vars = torch.cat((vars), 0)
+        probs = torch.cat((probs), 0)
+        # ys = torch.cat((ys), 0)
+
+        pred = torch.exp(train_df.loc[:, 'log_deseasoned_total_volume'].mean() + (means + 0.5 * vars) * train_df.loc[:,
+                                                                                                        'log_deseasoned_total_volume'].std())
+        pred = (pred * probs).sum(1) * test_df['mean_volume'].iloc[h:].to_numpy()
+
+        rmse = root_mean_squared_error(pred, test_df['total_volume'].iloc[h:])
+        mae = mean_absolute_error(pred, test_df['total_volume'].iloc[h:])
+        # print(rmse)
+        # print(mae)
+
+        new_row = pd.DataFrame({
+            'checkpoint': [file_name[23:]],
+            'h': [h],
+            'lr': [learning_rate],
+            'batch_size': [batch_size],
+            'lambda': [Lambda],
+            'epoch': [loaded_checkpoint['epoch']],
+            'val_loss': [loaded_checkpoint['loss']],
+            'test_loss': [test_loss],
+            'rmse': [rmse],
+            'mae': [mae]
+        })
+
+
+        val_res = pd.concat([val_res, new_row], ignore_index=True)
+        val_res.to_csv('validation_results_10m/results.csv')
+
+def train_ensemble(model,model_params:dict,train_df:pd.DataFrame,val_df:pd.DataFrame,):
+    pass
+    h = model_params['h']
+    learning_rate = model_params['learning_rate']
+    batch_size = model_params['batch_size']
+    Lambda = model_params['Lambda']
+
+    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+
+    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+
+    model = TME(h).double()
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
+    for i in range(20):
+        file_name = f'model{i+1}.pth'
+
+
+if __name__ == "__main__":
+    trx_df = read_txn_data(use_load=False)
+    lob_df = create_lob_dataset(use_load=False)
+
+    trx_df = preprocess_txn_data(trx_df, freq='10min', fill_missing_ts=False)
+
+    df_merged = merge_txn_and_lob(trx_df, lob_df)
+    # split data in train,val, test
+    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
+    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
+    df_merged = recalc(df_merged, train_df) #recalculate deseasonalised vol based on train data only
+    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
+    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
+
+    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
+    #only keeps rows of h,lambda with best val loss across both lr 1e-3 and 1e-4
+    new_val_res = val_res.reset_index().groupby(['h', 'lambda'], as_index=False, sort=False).last()
+    idx = new_val_res.sort_values('val_loss').index[:] #can restrict to smaller range
+    for i in idx:
+        if val_res.at[i,'checkpoint'] in [f'checkpoint{k}.pth' for k in range(2,26)]: #in case it is a missing checkpoint
+            print(val_res.at[i,'checkpoint'])
+            continue
+        h = val_res.at[i,'h']
+        learning_rate = val_res.at[i,'lr']
+        batch_size = val_res.at[i,'batch_size']
+        epoch = val_res.at[i,'epoch']
+        Lambda = val_res.at[i,'lambda']  # L2 regularisation coefficient
+
+        # standardize features
+        train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+        val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+        test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+
+        # train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+        # val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
+        # test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
+
+        train_dataloader = DataLoader(train_data, batch_size=int(batch_size), shuffle=False)
+        val_dataloader = DataLoader(val_data, batch_size=int(batch_size), shuffle=False)
+        test_dataloader = DataLoader(test_data, batch_size=int(batch_size), shuffle=False)
+
+        model = TME(h).double()
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=Lambda)
+
+        file_name = f'validation_results_10m\checkpoint{val_res.shape[0]}.pth'
+
+        # load best validation model for continued training or inference
+        loaded_checkpoint = torch.load(f'validation_results_10m/{val_res.at[i,"checkpoint"]}', weights_only=True)
+        model.load_state_dict(loaded_checkpoint['model_state'])
+        optimizer.load_state_dict(loaded_checkpoint['optimizer_state'])
+        for g in optimizer.param_groups:
+            g['lr'] = 1e-5
+        learning_rate = 1e-5
 
         best_val = val_res.at[i,"val_loss"]
         counter = 0
