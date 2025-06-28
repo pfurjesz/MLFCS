@@ -64,10 +64,14 @@ class latent_dist(nn.Module):
         self.R_lob = nn.Linear(self.h, 1,bias=False)
         self.L_lob = nn.Linear(13, 1,bias=True)
         self.soft=nn.Softmax(dim=1)
+        self.batchnorm_trx = nn.BatchNorm1d(6,affine=False)
+        self.batchnorm_lob = nn.BatchNorm1d(13,affine=False)
 
     def forward(self, trx, lob):
+        trx = self.batchnorm_trx(trx)
         trx = self.R_trx(trx)
         trx = self.L_trx(torch.permute(trx,(0,2,1)))
+        lob = self.batchnorm_lob(lob)
         lob = self.R_lob(lob)
         lob = self.L_lob(torch.permute(lob,(0,2,1)))
 
@@ -82,6 +86,8 @@ class log_norm(nn.Module):
         self.meanL_trx = nn.Linear(6, 1,bias=True)
         self.meanR_lob = nn.Linear(self.h, 1,bias=False)
         self.meanL_lob = nn.Linear(13, 1,bias=True)
+        self.batchnorm_trx = nn.BatchNorm1d(6,affine=False)
+        self.batchnorm_lob = nn.BatchNorm1d(13,affine=False)
 
         self.varR_trx = nn.Linear(self.h, 1,bias=False)
         self.varL_trx = nn.Linear(6, 1,bias=True)
@@ -90,6 +96,9 @@ class log_norm(nn.Module):
 
 
     def forward(self, trx, lob):
+        trx = self.batchnorm_trx(trx)
+        lob = self.batchnorm_lob(lob)
+
         trx_mean = self.meanR_trx(trx)
         trx_mean = self.meanL_trx(torch.permute(trx_mean,(0,2,1)))
         lob_mean = self.meanR_lob(lob)
@@ -115,37 +124,6 @@ class TME(nn.Module):
         mean, var = self.log_norm(trx,lob)
         prob = self.latent_dist(trx,lob)
         return mean,var,prob
-#input is 20 predictions
-class ensemble_probs(nn.Module):
-    def __init__(self,n):
-        super().__init__()
-        self.n=n #number of networks in ensemble. =20
-        self.linear = nn.Linear(self.n, self.n,bias=True)
-        self.soft=nn.Softmax(dim=1)
-
-    #input 20 predictions of 20 networks
-    def forward(self, x):
-        x = self.linear(x)
-        return self.soft(x)
-#input is features
-class ensemble_probs(nn.Module):
-    def __init__(self,h,n):
-        super().__init__()
-        self.h=h
-        self.n=n #number of models = 20
-        self.R = nn.Linear(self.h, self.n,bias=False)
-        self.L = nn.Linear(19, 1,bias=True)
-        self.soft=nn.Softmax(dim=1)
-
-    #input 20 predictions of 20 networks
-    def forward(self, trx, lob):
-        #combine both inputs into 1
-        x = torch.cat([torch.permute(trx,(1,0,2)),torch.permute(lob,(1,0,2))])
-        x = torch.permute(x,(1,0,2)) #number of points, features, window size
-        x = self.R(x)
-        x = self.L(torch.permute(x,(0,2,1)))
-
-        return self.soft(x.squeeze(dim=2))
 
 def TME_loss(pred,target,eps=1e-6):
     mean,var,prob = pred[0],pred[1],pred[2]
@@ -225,8 +203,8 @@ def test_loop(dataloader, model, loss_fn):
 
     print(f"Test Error: \n Test Loss: {test_loss:>8f} \n")
 
-#only search over different values of h
-def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lambda = 0.1, batch_size = 10918):
+#search top 10 hyperparams using batchnorm
+def validation_tests(top_n=10):
     trx_df = read_txn_data(use_load=False)
     lob_df = create_lob_dataset(use_load=False)
 
@@ -242,17 +220,26 @@ def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lamb
 
     #need to already have a dataframe with the right columns
     val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
-    for h in h_search_range:
+    idx=val_res.sort_values('val_loss').index
+    # new_val_res = None
+    new_val_res = pd.read_csv('batch_norm_validation_results_10m/results.csv', index_col=0)
+    for i in idx[:top_n]:
+        h = val_res.at[i, 'h']
+        learning_rate = val_res.at[i, 'lr']
+        batch_size = int(val_res.at[i, 'batch_size'])
+        Lambda = val_res.at[i, 'lambda']
+        if learning_rate != 0.001:
+            continue
         # epochs = 30
 
         # standardize features
-        train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-        val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-        test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+        # train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+        # val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+        # test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
 
-        # train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
-        # val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
-        # test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
+        train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+        val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
+        test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
 
         train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=False)
         val_dataloader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
@@ -261,8 +248,12 @@ def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lamb
         model = TME(h).double()
 
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=Lambda)
-
-        file_name = f'validation_results_10m\checkpoint{val_res.shape[0]}.pth'
+        # print(1)
+        if new_val_res is None:
+            new_val_res = pd.DataFrame()
+        # print(2)
+        file_name = f'batch_norm_validation_results_10m\checkpoint{new_val_res.shape[0]}.pth'
+        # print(3)
 
         best_val = float('inf')
         counter = 0
@@ -280,7 +271,7 @@ def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lamb
         print("Done!")
 
         #load best validation model for continued training or inference
-        loaded_checkpoint = torch.load(file_name, weights_only=True)
+        loaded_checkpoint = torch.load(file_name, weights_only=False)
         model = TME(h).double()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
         model.load_state_dict(loaded_checkpoint['model_state'])
@@ -318,7 +309,7 @@ def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lamb
         # print(mae)
 
         new_row = pd.DataFrame({
-            'checkpoint': [file_name[23:]],
+            'checkpoint': [file_name[34:]],
             'h': [h],
             'lr': [learning_rate],
             'batch_size': [batch_size],
@@ -331,8 +322,8 @@ def validation_tests(h_search_range=range(3,24*6+3,3),learning_rate = 1e-3, Lamb
         })
 
 
-        val_res = pd.concat([val_res, new_row], ignore_index=True)
-        val_res.to_csv('validation_results_10m/results.csv')
+        new_val_res = pd.concat([new_val_res, new_row], ignore_index=True)
+        new_val_res.to_csv('batch_norm_validation_results_10m/results.csv')
 
 #ran after validation_tests. continue training models switch lr to 1e-4.
 # Only improved validation results are saved. Epochs saved is total epochs with lr 1e-4
@@ -594,8 +585,11 @@ def train_ensemble(model_params:dict, df_merged:pd.DataFrame,):
     batch_size = model_params['batch_size']
     Lambda = model_params['lambda']
 
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+    # train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+    # val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+
+    train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+    val_data = CustomDataset(val_df.iloc[:, 1:-1], h)
 
     train_dataloader = DataLoader(train_data, batch_size=int(batch_size), shuffle=True)
     val_dataloader = DataLoader(val_data, batch_size=int(batch_size), shuffle=False)
@@ -603,7 +597,7 @@ def train_ensemble(model_params:dict, df_merged:pd.DataFrame,):
     for i in range(20):
         model = TME(h).double()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=Lambda)
-        file_name = f'ensemble_10m/model{i+1}.pth'
+        file_name = f'batch_norm_ensemble_10m/model{i+1}.pth'
         best_val = float('inf')
         counter = 0
         t = 0
@@ -630,10 +624,22 @@ def save_ensemble():
     train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
     df_merged = recalc(df_merged, train_df) #recalculate deseasonalised vol based on train data only
 
-    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
+    val_res = pd.read_csv('batch_norm_validation_results_10m/results.csv', index_col=0)
 
-    train_ensemble(val_res.loc[103],df_merged)
-#input is 20 predictions
+    train_ensemble(val_res.loc[0],df_merged)
+
+class ensemble_probs(nn.Module):
+    def __init__(self,n):
+        super().__init__()
+        self.n=n #number of networks in ensemble. =20
+        self.linear = nn.Linear(self.n, self.n,bias=True)
+        self.soft=nn.Softmax(dim=1)
+
+    #input 20 predictions of 20 networks
+    def forward(self, x):
+        x = self.linear(x)
+        return self.soft(x)
+
 def train_ensemble_probs_loop(train_x,train_y,val_x,val_y,model,loss_fn, optimizer, epoch, checkpoint_name:str='training_checkpoint.pth',stop_counter=0, epochs_before_stopping = 10, best_val = float('inf')):
     #training starts here after obtaining inputs
     # Set the model to training mode - important for batch normalization and dropout layers
@@ -677,61 +683,7 @@ def train_ensemble_probs_loop(train_x,train_y,val_x,val_y,model,loss_fn, optimiz
         return (True, best_val,counter)
     else:
         return (False, best_val,counter)
-#input is features from lob and trx
-def train_ensemble_probs_loop(train_dataloader,val_dataloader,train_x,train_y,val_x,val_y,model,loss_fn, optimizer, epoch, checkpoint_name:str='training_checkpoint.pth',stop_counter=0, epochs_before_stopping = 10, best_val = float('inf')):
-    #training starts here after obtaining inputs
-    # Set the model to training mode - important for batch normalization and dropout layers
-    # Unnecessary in this situation but added for best practices
-    model.train()
-    # Compute prediction and loss
-    train_loss = 0
-    for batch, (trx,lob, y) in enumerate(train_dataloader):
-        # Compute prediction and loss
-        pred = model(trx,lob)
-        loss = loss_fn((pred*train_x).sum(1), y) #MSE loss
-        train_loss += loss.item()
-        # print(f"batch number {batch},loss: {loss.item()}")
 
-        # Backpropagation
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-
-        # if batch % 100 == 0:
-        #     loss, current = loss.item(), batch * batch_size + len(trx)
-        #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-    if epoch%100 == 0:
-        print(f"train loss: {train_loss:>7f}")
-
-    model.eval()
-    val_loss = 0
-    counter = stop_counter
-    with torch.no_grad():
-        for trx, lob, y in val_dataloader:
-            pred = model(trx,lob)
-            val_loss += loss_fn((pred * val_x).sum(1), y).item()
-
-    if val_loss < best_val:
-        counter = 0
-        best_val = val_loss
-        checkpoint = {
-            'epoch': epoch + 1,  # count start from 1
-            'model_state': model.state_dict(),
-            'optimizer_state': optimizer.state_dict(),
-            'loss': val_loss,
-        }
-        torch.save(checkpoint, checkpoint_name)
-        # print('new checkpoint saved')
-    else:
-        counter += 1
-    if epoch % 100 == 0:
-        print(f"val loss: {val_loss:>7f}")
-
-    if counter >= epochs_before_stopping:
-        return (True, best_val,counter)
-    else:
-        return (False, best_val,counter)
-#input is 20 predictions
 def train_ensemble_probs():
     trx_df = read_txn_data(use_load=False)
     lob_df = create_lob_dataset(use_load=False)
@@ -746,17 +698,21 @@ def train_ensemble_probs():
     _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
     train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
 
-    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
+    val_res = pd.read_csv('batch_norm_validation_results_10m/results.csv', index_col=0)
 
-    h = val_res.at[103, 'h']
-    learning_rate = val_res.at[103, 'lr']
-    batch_size = val_res.at[103, 'batch_size']
-    Lambda = val_res.at[103, 'lambda']
+    h = val_res.at[0, 'h']
+    learning_rate = val_res.at[0, 'lr']
+    batch_size = val_res.at[0, 'batch_size']
+    Lambda = val_res.at[0, 'lambda']
 
     # standardize features
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-    test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+    # train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+    # val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+    # test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+
+    train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+    val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
+    test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
 
     train_predictions = []
     val_predictions = []
@@ -769,7 +725,7 @@ def train_ensemble_probs():
     for i in range(1,21):
         model = TME(h).double()
 
-        file_name = f'ensemble_10m\model{i}.pth'
+        file_name = f'batch_norm_ensemble_10m\model{i}.pth'
 
         # load best validation model for continued training or inference
         loaded_checkpoint = torch.load(file_name, weights_only=False)
@@ -794,11 +750,11 @@ def train_ensemble_probs():
         vars = torch.cat((vars), 0)
         probs = torch.cat((probs), 0)
 
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
+        target_mean = 0 #no standardisation needed with batch norm
+        target_std = 1 #no standardisation needed with batch norm
 
         pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
+            (means + 0.5 * vars)
         )
 
         pred = (pred * probs).sum(1) * train_df['mean_volume'].iloc[h:].to_numpy()
@@ -823,11 +779,11 @@ def train_ensemble_probs():
         vars = torch.cat((vars), 0)
         probs = torch.cat((probs), 0)
 
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
+        target_mean = 0 #no standardisation needed with batch norm
+        target_std = 1 #no standardisation needed with batch norm
 
         pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
+            (means + 0.5 * vars)
         )
 
         pred = (pred * probs).sum(1) * val_df['mean_volume'].iloc[h:].to_numpy()
@@ -852,11 +808,11 @@ def train_ensemble_probs():
         vars = torch.cat((vars), 0)
         probs = torch.cat((probs), 0)
 
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
+        target_mean = 0 #no standardisation needed with batch norm
+        target_std = 1 #no standardisation needed with batch norm
 
         pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
+            (means + 0.5 * vars)
         )
         #cannot reorder IW assignment because it uses the previous definition of pred which changes next line
         IW[i-1] = (probs * (cond_var((pred1, pred2, pred3), torch.tensor(test_df["mean_volume"].iloc[h:].to_numpy()), target_mean,
@@ -866,7 +822,9 @@ def train_ensemble_probs():
 
     #input for ensemble_probs network
     train_x = torch.stack(train_predictions, dim=1)
+    train_x[torch.isinf(train_x)] = train_x[~torch.isinf(train_x)].max() #set all inf values to max non inf value
     val_x = torch.stack(val_predictions, dim=1)
+    val_x[torch.isinf(val_x)] = val_x[~torch.isinf(val_x)].max()  # set all inf values to max non inf value
     test_x = torch.stack(test_predictions, dim=1)
     train_y = train_df['total_volume'].iloc[h:]
     val_y = val_df['total_volume'].iloc[h:]
@@ -877,7 +835,7 @@ def train_ensemble_probs():
 
     model = ensemble_probs(20).double()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     file_name = f'ensemble_probs_10m\checkpoint.pth'
 
@@ -888,7 +846,7 @@ def train_ensemble_probs():
     while not stop:
         if t % 100 == 0:
             print(f"Epoch {t + 1}\n-------------------------------")
-        stop, best_val, counter = train_ensemble_probs_loop(train_x,train_y,val_x,val_y, model, nn.MSELoss(reduction='mean'), optimizer, t,
+        stop, best_val, counter = train_ensemble_probs_loop(train_x,train_y,val_x,val_y, model, nn.MSELoss(), optimizer, t,
                                              stop_counter=counter, best_val=best_val, checkpoint_name=file_name)
         t += 1
         if stop:
@@ -902,379 +860,10 @@ def train_ensemble_probs():
     print(f'MAE = {mae}')
     # print(f'NNLL = {NNLL(predictions.mean(1),torch.tensor(test_df["total_volume"].iloc[h:].to_numpy())) + Lambda * reg_term/(2*20)}')
     print(f'NNLL = {NNLL((test_x*model(test_x)).sum(1), torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()))}')
-    print(f'IW = {torch.sqrt((model(test_x)*torch.permute(IW,[1,0])).sum(1) - torch.square((test_x*model(test_x)).sum(1).detach())).mean()}')
+    print(f'IW = {torch.sqrt((model(test_x)*torch.permute(IW,[1,0])).sum(1) - torch.square(predictions.mean(1))).mean()}')
 
-    # plot1()
-    # plot2()
-#input is features from lob and trx
-def train_ensemble_probs():
-    trx_df = read_txn_data(use_load=False)
-    lob_df = create_lob_dataset(use_load=False)
-
-    trx_df = preprocess_txn_data(trx_df, freq='10min', fill_missing_ts=False)
-
-    df_merged = merge_txn_and_lob(trx_df, lob_df)
-    # split data in train,val, test
-    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
-    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
-    df_merged = recalc(df_merged, train_df) #recalculate deseasonalised vol based on train data only
-    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
-    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
-
-    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
-
-    h = val_res.at[103, 'h']
-    learning_rate = val_res.at[103, 'lr']
-    batch_size = val_res.at[103, 'batch_size']
-    Lambda = val_res.at[103, 'lambda']
-
-    # standardize features
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-    test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-
-    train_predictions = []
-    val_predictions = []
-    test_predictions = []
-    train_dataloader = DataLoader(train_data, batch_size=int(batch_size), shuffle=False)
-    val_dataloader = DataLoader(val_data, batch_size=int(batch_size), shuffle=False)
-    test_dataloader = DataLoader(test_data, batch_size=int(batch_size), shuffle=False)
-
-    IW = torch.ones(()).new_empty((20, len(test_data)))
-    for i in range(1,21):
-        model = TME(h).double()
-
-        file_name = f'ensemble_10m\model{i}.pth'
-
-        # load best validation model for continued training or inference
-        loaded_checkpoint = torch.load(file_name, weights_only=False)
-        model.load_state_dict(loaded_checkpoint['model_state'])
-        model.eval()
-        test_loss = 0
-        means = []
-        vars = []
-        probs = []
-        # ys = []
-
-        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-        with torch.no_grad():
-            for trx, lob, y in train_dataloader:
-                pred1, pred2, pred3 = model(trx, lob)
-                means.append(pred1)
-                vars.append(pred2)
-                probs.append(pred3)
-                # ys.append(y)
-                test_loss += TME_loss((pred1, pred2, pred3), y).item()
-        means = torch.cat((means), 0)
-        vars = torch.cat((vars), 0)
-        probs = torch.cat((probs), 0)
-
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
-
-        pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
-        )
-
-        pred = (pred * probs).sum(1) * train_df['mean_volume'].iloc[h:].to_numpy()
-        train_predictions.append(pred)
-
-        test_loss = 0
-        means = []
-        vars = []
-        probs = []
-        # ys = []
-
-        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-        with torch.no_grad():
-            for trx, lob, y in val_dataloader:
-                pred1, pred2, pred3 = model(trx, lob)
-                means.append(pred1)
-                vars.append(pred2)
-                probs.append(pred3)
-                # ys.append(y)
-                test_loss += TME_loss((pred1, pred2, pred3), y).item()
-        means = torch.cat((means), 0)
-        vars = torch.cat((vars), 0)
-        probs = torch.cat((probs), 0)
-
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
-
-        pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
-        )
-
-        pred = (pred * probs).sum(1) * val_df['mean_volume'].iloc[h:].to_numpy()
-        val_predictions.append(pred)
-
-        test_loss = 0
-        means = []
-        vars = []
-        probs = []
-        # ys = []
-
-        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-        with torch.no_grad():
-            for trx, lob, y in test_dataloader:
-                pred1, pred2, pred3 = model(trx, lob)
-                means.append(pred1)
-                vars.append(pred2)
-                probs.append(pred3)
-                # ys.append(y)
-                test_loss += TME_loss((pred1, pred2, pred3), y).item()
-        means = torch.cat((means), 0)
-        vars = torch.cat((vars), 0)
-        probs = torch.cat((probs), 0)
-
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
-
-        pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
-        )
-        #cannot reorder IW assignment because it uses the previous definition of pred which changes next line
-        IW[i-1] = (probs * (cond_var((pred1, pred2, pred3), torch.tensor(test_df["mean_volume"].iloc[h:].to_numpy()), target_mean,
-                         target_std) + torch.square(torch.tensor(test_df['mean_volume'].iloc[h:].to_numpy()).unsqueeze(dim=1)*pred))).sum(1)
-        pred = (pred * probs).sum(1) * test_df['mean_volume'].iloc[h:].to_numpy()
-        test_predictions.append(pred)
-
-    #input for ensemble_probs network
-    train_x = torch.stack(train_predictions, dim=1)
-    val_x = torch.stack(val_predictions, dim=1)
-    test_x = torch.stack(test_predictions, dim=1)
-    train_y = train_df['total_volume'].iloc[h:]
-    val_y = val_df['total_volume'].iloc[h:]
-    test_y = test_df['total_volume'].iloc[h:]
-
-    # for i in range(len(IW)):
-    #     IW[i] = IW[i] - test_x.mean(1)
-
-    model = ensemble_probs(h,20).double()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    file_name = f'ensemble_probs_10m/alt_checkpoint1.pth'
-
-    best_val = float('inf')
-    counter = 0
-    t = 0
-    stop = False
-    while not stop:
-        if t % 100 == 0:
-            print(f"Epoch {t + 1}\n-------------------------------")
-        stop, best_val, counter = train_ensemble_probs_loop(train_dataloader,val_dataloader,train_x,train_y,val_x,val_y, model, nn.MSELoss(reduction='mean'), optimizer, t,
-                                             stop_counter=counter, best_val=best_val, checkpoint_name=file_name)
-        t += 1
-        if stop:
-            break
-    print("Done!")
-    # eval on test set
-    ens_probs = []
-    with torch.no_grad():
-        for trx, lob, y in test_dataloader:
-            ens_probs.append(model(trx, lob))
-    ens_probs = torch.cat(ens_probs, 0)
-
-    rmse = root_mean_squared_error((test_x*ens_probs).sum(1).detach().numpy(), test_y)
-    mae = mean_absolute_error((test_x*ens_probs).sum(1).detach().numpy(), test_y)
-    print(f'RMSE = {rmse}')
-    print(f'MAE = {mae}')
-    # print(f'NNLL = {NNLL(predictions.mean(1),torch.tensor(test_df["total_volume"].iloc[h:].to_numpy())) + Lambda * reg_term/(2*20)}')
-    print(f'NNLL = {NNLL((test_x*ens_probs).sum(1), torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()))}')
-    print(f'IW = {torch.sqrt((ens_probs*torch.permute(IW,[1,0])).sum(1) - torch.square((test_x*ens_probs).sum(1).detach())).mean()}')
-
-    # plot1()
-    # plot2()
-#input is features from lob and trx with lower learning rate 1e-4
-def train_ensemble_probs():
-    trx_df = read_txn_data(use_load=False)
-    lob_df = create_lob_dataset(use_load=False)
-
-    trx_df = preprocess_txn_data(trx_df, freq='10min', fill_missing_ts=False)
-
-    df_merged = merge_txn_and_lob(trx_df, lob_df)
-    # split data in train,val, test
-    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
-    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
-    df_merged = recalc(df_merged, train_df) #recalculate deseasonalised vol based on train data only
-    _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
-    train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
-
-    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
-
-    h = val_res.at[103, 'h']
-    learning_rate = val_res.at[103, 'lr']
-    batch_size = val_res.at[103, 'batch_size']
-    Lambda = val_res.at[103, 'lambda']
-
-    # standardize features
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-    test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-
-    train_predictions = []
-    val_predictions = []
-    test_predictions = []
-    train_dataloader = DataLoader(train_data, batch_size=int(batch_size), shuffle=False)
-    val_dataloader = DataLoader(val_data, batch_size=int(batch_size), shuffle=False)
-    test_dataloader = DataLoader(test_data, batch_size=int(batch_size), shuffle=False)
-
-    IW = torch.ones(()).new_empty((20, len(test_data)))
-    for i in range(1,21):
-        model = TME(h).double()
-
-        file_name = f'ensemble_10m\model{i}.pth'
-
-        # load best validation model for continued training or inference
-        loaded_checkpoint = torch.load(file_name, weights_only=False)
-        model.load_state_dict(loaded_checkpoint['model_state'])
-        model.eval()
-        test_loss = 0
-        means = []
-        vars = []
-        probs = []
-        # ys = []
-
-        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-        with torch.no_grad():
-            for trx, lob, y in train_dataloader:
-                pred1, pred2, pred3 = model(trx, lob)
-                means.append(pred1)
-                vars.append(pred2)
-                probs.append(pred3)
-                # ys.append(y)
-                test_loss += TME_loss((pred1, pred2, pred3), y).item()
-        means = torch.cat((means), 0)
-        vars = torch.cat((vars), 0)
-        probs = torch.cat((probs), 0)
-
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
-
-        pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
-        )
-
-        pred = (pred * probs).sum(1) * train_df['mean_volume'].iloc[h:].to_numpy()
-        train_predictions.append(pred)
-
-        test_loss = 0
-        means = []
-        vars = []
-        probs = []
-        # ys = []
-
-        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-        with torch.no_grad():
-            for trx, lob, y in val_dataloader:
-                pred1, pred2, pred3 = model(trx, lob)
-                means.append(pred1)
-                vars.append(pred2)
-                probs.append(pred3)
-                # ys.append(y)
-                test_loss += TME_loss((pred1, pred2, pred3), y).item()
-        means = torch.cat((means), 0)
-        vars = torch.cat((vars), 0)
-        probs = torch.cat((probs), 0)
-
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
-
-        pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
-        )
-
-        pred = (pred * probs).sum(1) * val_df['mean_volume'].iloc[h:].to_numpy()
-        val_predictions.append(pred)
-
-        test_loss = 0
-        means = []
-        vars = []
-        probs = []
-        # ys = []
-
-        # check rmse and mae using predictions of raw seasonalised volume. v_t=a_I(t)*y_t
-        with torch.no_grad():
-            for trx, lob, y in test_dataloader:
-                pred1, pred2, pred3 = model(trx, lob)
-                means.append(pred1)
-                vars.append(pred2)
-                probs.append(pred3)
-                # ys.append(y)
-                test_loss += TME_loss((pred1, pred2, pred3), y).item()
-        means = torch.cat((means), 0)
-        vars = torch.cat((vars), 0)
-        probs = torch.cat((probs), 0)
-
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
-
-        pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
-        )
-        #cannot reorder IW assignment because it uses the previous definition of pred which changes next line
-        IW[i-1] = (probs * (cond_var((pred1, pred2, pred3), torch.tensor(test_df["mean_volume"].iloc[h:].to_numpy()), target_mean,
-                         target_std) + torch.square(torch.tensor(test_df['mean_volume'].iloc[h:].to_numpy()).unsqueeze(dim=1)*pred))).sum(1)
-        pred = (pred * probs).sum(1) * test_df['mean_volume'].iloc[h:].to_numpy()
-        test_predictions.append(pred)
-
-    #input for ensemble_probs network
-    train_x = torch.stack(train_predictions, dim=1)
-    val_x = torch.stack(val_predictions, dim=1)
-    test_x = torch.stack(test_predictions, dim=1)
-    train_y = train_df['total_volume'].iloc[h:]
-    val_y = val_df['total_volume'].iloc[h:]
-    test_y = test_df['total_volume'].iloc[h:]
-
-    # for i in range(len(IW)):
-    #     IW[i] = IW[i] - test_x.mean(1)
-
-    model = ensemble_probs(h,20).double()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    file_name = f'ensemble_probs_10m/alt_checkpoint1.pth'
-    loaded_checkpoint = torch.load(file_name, weights_only=False)
-    model = ensemble_probs(24,20).double()
-    model.load_state_dict(loaded_checkpoint['model_state'])
-    optimizer.load_state_dict(loaded_checkpoint['optimizer_state'])
-    for g in optimizer.param_groups:
-        g['lr'] = 1e-4
-    learning_rate = 1e-4
-
-    file_name = f'ensemble_probs_10m/alt_checkpoint_cont1.pth'
-
-    best_val = 12675.933999
-    counter = 0
-    t = 0
-    stop = False
-    while not stop:
-        if t % 100 == 0:
-            print(f"Epoch {t + 1}\n-------------------------------")
-        stop, best_val, counter = train_ensemble_probs_loop(train_dataloader,val_dataloader,train_x,train_y,val_x,val_y, model, nn.MSELoss(reduction='mean'), optimizer, t,
-                                             stop_counter=counter, best_val=best_val, checkpoint_name=file_name)
-        t += 1
-        if stop:
-            break
-    print("Done!")
-    # eval on test set
-    ens_probs = []
-    with torch.no_grad():
-        for trx, lob, y in test_dataloader:
-            ens_probs.append(model(trx, lob))
-    ens_probs = torch.cat(ens_probs, 0)
-
-    rmse = root_mean_squared_error((test_x*ens_probs).sum(1).detach().numpy(), test_y)
-    mae = mean_absolute_error((test_x*ens_probs).sum(1).detach().numpy(), test_y)
-    print(f'RMSE = {rmse}')
-    print(f'MAE = {mae}')
-    # print(f'NNLL = {NNLL(predictions.mean(1),torch.tensor(test_df["total_volume"].iloc[h:].to_numpy())) + Lambda * reg_term/(2*20)}')
-    print(f'NNLL = {NNLL((test_x*ens_probs).sum(1), torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()))}')
-    print(f'IW = {torch.sqrt((ens_probs*torch.permute(IW,[1,0])).sum(1) - torch.square((test_x*ens_probs).sum(1).detach())).mean()}')
-
-    # plot1()
-    # plot2()
+    plot1()
+    plot2()
 
 
 def NNLL(pred, target, eps=1e-6):
@@ -1344,17 +933,21 @@ if __name__ == "__main__":
     _, test_df = train_test_split(df_merged, train_size=0.8, shuffle=False)
     train_df, val_df = train_test_split(_, train_size=7 / 8, shuffle=False)
 
-    val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
+    val_res = pd.read_csv('batch_norm_validation_results_10m/results.csv', index_col=0)
 
-    h = val_res.at[103, 'h']
-    learning_rate = val_res.at[103, 'lr']
-    batch_size = val_res.at[103, 'batch_size']
-    Lambda = val_res.at[103, 'lambda']
+    h = val_res.at[0, 'h']
+    learning_rate = val_res.at[0, 'lr']
+    batch_size = val_res.at[0, 'batch_size']
+    Lambda = val_res.at[0, 'lambda']
 
     # standardize features
-    train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
-    val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
-    test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+    # train_data = CustomDataset((train_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(),h)
+    # val_data = CustomDataset((val_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+    # test_data = CustomDataset((test_df.iloc[:, 1:-1] - train_df.iloc[:, 1:-1].mean()) / train_df.iloc[:, 1:-1].std(), h)
+
+    train_data = CustomDataset(train_df.iloc[:, 1:-1], h)
+    val_data = CustomDataset(val_df.iloc[:, 1:-1] , h)
+    test_data = CustomDataset(test_df.iloc[:, 1:-1], h)
 
     predictions = []
     log_likelihood = []
@@ -1367,7 +960,7 @@ if __name__ == "__main__":
         model = TME(h).double()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=Lambda)
 
-        file_name = f'ensemble_10m\model{i}.pth'
+        file_name = f'batch_norm_ensemble_10m\model{i}.pth'
 
         # load best validation model for continued training or inference
         loaded_checkpoint = torch.load(file_name, weights_only=False)
@@ -1395,11 +988,13 @@ if __name__ == "__main__":
         # ys = torch.cat((ys), 0)
         reg_term += sum((p*p).sum() for p in model.parameters())
 
-        target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
-        target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
+        # target_mean = train_df.loc[:, 'log_deseasoned_total_volume'].mean()
+        # target_std = train_df.loc[:,'log_deseasoned_total_volume'].std()
+        target_mean = 0 #no standardisation needed in batch norm
+        target_std = 1 #no standardisation needed in batch norm
 
         pred = torch.exp(
-            target_mean + (means + 0.5 * vars * target_std) * target_std
+            (means + 0.5 * vars)
         )
         #cannot reorder IW assignment because it uses the previous definition of pred which changes next line
         IW[i-1] = (probs * (cond_var((pred1, pred2, pred3), torch.tensor(test_df["mean_volume"].iloc[h:].to_numpy()), target_mean,
@@ -1419,9 +1014,3 @@ if __name__ == "__main__":
 
     plot1()
     plot2()
-
-    # file_name = f'ensemble_probs_10m/alt_checkpoint.pth'
-    # loaded_checkpoint = torch.load(file_name, weights_only=False)
-    # model = ensemble_probs(24,20).double()
-    # model.load_state_dict(loaded_checkpoint['model_state'])
-    # model.eval()
