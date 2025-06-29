@@ -862,10 +862,6 @@ def train_ensemble_probs():
     print(f'NNLL = {NNLL((test_x*model(test_x)).sum(1), torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()))}')
     print(f'IW = {torch.sqrt((model(test_x)*torch.permute(IW,[1,0])).sum(1) - torch.square(predictions.mean(1))).mean()}')
 
-    plot1()
-    plot2()
-
-
 def NNLL(pred, target, eps=1e-6):
     mean, var, prob = pred[0], pred[1], pred[2]
     target = target.unsqueeze(dim=1)
@@ -1009,8 +1005,5 @@ if __name__ == "__main__":
     print(f'RMSE = {rmse}')
     print(f'MAE = {mae}')
     # print(f'NNLL = {NNLL(predictions.mean(1),torch.tensor(test_df["total_volume"].iloc[h:].to_numpy())) + Lambda * reg_term/(2*20)}')
-    print(f'NNLL = {NNLL(predictions.mean(1), torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()))}')
+    print(f'NNLL = {NNLL(predictions.mean(1), torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()),0)}')
     print(f'IW = {torch.sqrt(IW.mean(0) - torch.square(predictions.mean(1))).mean()}')
-
-    plot1()
-    plot2()
