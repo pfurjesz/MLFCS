@@ -5,13 +5,14 @@ from utils import read_txn_data, preprocess_txn_data, create_lob_dataset, merge_
 import xgboost as xgb
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, make_scorer, r2_score
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, PredefinedSplit
+from matplotlib import pyplot as plt
 
 # train ,val ,test = 0.7, 0.1, 0.2
 
 trx_df = read_txn_data(use_load=False)
 lob_df = create_lob_dataset(use_load=False)
 
-trx_df = preprocess_txn_data(trx_df, freq='5min',fill_missing_ts=False)
+trx_df = preprocess_txn_data(trx_df, freq='1min',fill_missing_ts=False)
 
 df_merged = merge_txn_and_lob(trx_df, lob_df)
 
@@ -53,7 +54,7 @@ def get_features(df:pd.DataFrame)->np.ndarray:
 
 def get_targets(df:pd.DataFrame,log=False)->np.ndarray:
     # No features to predict first target
-    return df[['deseasoned_total_volume','total_volume', 'mean_volume']].values[1:]
+    return df[['deseasoned_total_volume','total_volume', 'mean_volume','log_deseasoned_total_volume']].values[1:]
 
 dfs_features = get_features(df_merged)
 dfs_targets = get_targets(df_merged)
@@ -117,7 +118,8 @@ def custom_obj(actual: np.ndarray,pred: np.ndarray):
     return grad, hess
 
 
-model = xgb.XGBRegressor(objective=custom_obj)
+# model = xgb.XGBRegressor(objective=custom_obj)
+model = xgb.XGBRegressor()
 param_grid ={"n_estimators": [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
                'subsample': [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1],
                "min_child_weight":[2,3,4,5,6,7,8,9],
@@ -125,24 +127,36 @@ param_grid ={"n_estimators": [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
               'learning_rate': [0.005, 0.01,0.015,0.02,0.025,0.03,0.035,0.04,0.045,0.05]
              }
 
+# search = RandomizedSearchCV(
+#     model, n_iter=500, refit=False, scoring={'rmse':rmse,'mae':mae},param_distributions=param_grid,cv=split
+# )
+
 search = RandomizedSearchCV(
-    model, n_iter=500, refit=False, scoring={'rmse':rmse,'mae':mae},param_distributions=param_grid,cv=split
+    model, n_iter=500, refit=False, scoring="neg_mean_squared_error",param_distributions=param_grid,cv=split
 )
 
-search.fit(x,y[:,0])
+search.fit(x,y[:,3])
 search_df=pd.DataFrame(search.cv_results_)
-search_df.drop(columns = ['std_test_rmse', 'std_fit_time', 'std_test_mae', 'std_score_time'] ,inplace=True)
-search_df.to_csv('xgboost_val/search1-5m.csv')
+# search_df.drop(columns = ['std_test_rmse', 'std_fit_time', 'std_test_mae', 'std_score_time'] ,inplace=True)
+search_df.to_csv('xgboost_val/search2-1m.csv')
 
-search_df[search_df['rank_test_mae'] == 1]
-search_df[search_df['rank_test_rmse'] == 1]
-params=search_df.at[430,'params']
+# search_df[search_df['rank_test_mae'] == 1]
+# search_df[search_df['rank_test_rmse'] == 1]
+# params=search_df.at[164,'params']
 
-testmodel = model = xgb.XGBRegressor(objective=custom_obj,**params)
-testmodel.fit(x,y[:,0])
-print(root_mean_squared_error(testmodel.predict(x_test),y_test[:,0]))
-print(mean_absolute_error(testmodel.predict(x_test),y_test[:,0]))
-print(r2_score(testmodel.predict(x_test),y_test[:,0]))
+search_df[search_df['rank_test_score'] == 1]
+params=search_df.at[314,'params']
+
+# testmodel = xgb.XGBRegressor(objective=custom_obj,**params)
+testmodel = xgb.XGBRegressor(**params)
+testmodel.fit(x,y[:,3])
+# print(root_mean_squared_error(np.maximum(testmodel.predict(x_test),0).reshape(-1,1)*y_test[:,2].reshape(-1,1),y_test[:,1]))
+# print(mean_absolute_error(np.maximum(testmodel.predict(x_test),0).reshape(-1,1)*y_test[:,2].reshape(-1,1),y_test[:,1]))
+# print(r2_score(np.maximum(testmodel.predict(x_test),0).reshape(-1,1)*y_test[:,2].reshape(-1,1),y_test[:,1]))
+
+print(root_mean_squared_error(np.exp(testmodel.predict(x_test)).reshape(-1,1)*y_test[:,2].reshape(-1,1),y_test[:,1]))
+print(mean_absolute_error(np.exp(testmodel.predict(x_test)).reshape(-1,1)*y_test[:,2].reshape(-1,1),y_test[:,1]))
+print(r2_score(np.exp(testmodel.predict(x_test)).reshape(-1,1)*y_test[:,2].reshape(-1,1),y_test[:,1]))
 
 #nan for 10 min
 # {'subsample': 0.6,
@@ -150,3 +164,16 @@ print(r2_score(testmodel.predict(x_test),y_test[:,0]))
 #  'min_child_weight': 2,
 #  'max_depth': 6,
 #  'learning_rate': 0.045}
+
+search_df=pd.read_csv('xgboost_val/search2-10m.csv',index_col=0)
+
+plt.figure(figsize=(10, 3.5))
+plt.plot(y_test[:,1], label="true", color="#4C72B0", alpha=0.8,
+         linewidth=1.0)
+plt.plot(np.exp(testmodel.predict(x_test)).reshape(-1,1)*y_test[:,2].reshape(-1,1), label="pred", color="#BD561A", alpha=0.9, linewidth=1.2)
+plt.title("Test – total volume")
+plt.xlabel("sample")
+plt.ylabel("volume")
+plt.legend()
+plt.tight_layout()
+plt.show()
