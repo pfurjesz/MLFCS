@@ -1383,10 +1383,11 @@ class SWAGInference(object):
             model_dir: int,
             # TODO(2): optionally add/tweak hyperparameters
             swag_training_epochs: int = 20,
-            swag_lr: float = 0.001,
+            swag_lr: float = 0.0001,
             swag_update_interval: int = 1,
             max_rank_deviation_matrix: int = 20,
             num_bma_samples: int = 20,
+            swag_batch: int = 256
     ):
         """
         :param loaders: tuple of (train,val,test) dataloaders
@@ -1404,6 +1405,7 @@ class SWAGInference(object):
         self.swag_update_interval = swag_update_interval
         self.max_rank_deviation_matrix = max_rank_deviation_matrix
         self.num_bma_samples = num_bma_samples
+        self.swag_batch = swag_batch
 
         val_res = pd.read_csv('validation_results_10m/results.csv', index_col=0)
 
@@ -1717,7 +1719,8 @@ def SWAG_main():
         loaders=(train_dataloader, val_dataloader, test_dataloader),
         model_dir=1,
     )
-    swag_inference.fit(train_dataloader)
+    swag_dataloader = DataLoader(train_data, batch_size=int(swag_inference.swag_batch), shuffle=True)
+    swag_inference.fit(swag_dataloader) #maybe use a loader with smaller batch size
 
     pred1,pred2 = swag_inference.predict_probabilities(test_dataloader,train_df,test_df)
 
@@ -1727,7 +1730,7 @@ def SWAG_main():
     print(f'RMSE = {rmse}')
     print(f'MAE = {mae}')
     # print(f'NNLL = {NNLL(predictions.mean(1),torch.tensor(test_df["total_volume"].iloc[h:].to_numpy())) + Lambda * reg_term/(2*20)}')
-    print(f'NNLL = {NNLL(pred1, torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()))}')
+    print(f'NNLL = {NNLL(pred1, torch.tensor(test_df["total_volume"].iloc[h:].to_numpy()),0)}')
     print(f'IW = {torch.sqrt(pred2 - torch.square(pred1)).mean()}')
 
 
